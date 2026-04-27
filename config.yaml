@@ -1,0 +1,32 @@
+data:
+  regression_tasks: tasks/regression.jsonl
+  test_tasks: tasks/test_verifiable.jsonl
+  train_tasks: tasks/train_fast.jsonl
+evaluator:
+  judge_model: gpt-4o-mini
+  qualitative_tasks: tasks/train.jsonl
+evolution:
+  concurrency: 8
+  generations: 3
+  graduation_threshold: 0.85
+  mutation_model: gpt-4o-mini
+  mutation_types:
+  - llm
+  - random
+  - crossover
+  patience: 3
+  population_size: 5
+  random_mutation_rate: 0.5
+  task_timeout_s: 120
+paths:
+  db_path: logs/lineage.db
+  logs_dir: logs
+  specs_dir: specs
+runtime:
+  agent_model: gpt-4o-mini
+  available_tools:
+  - web_search
+  - scrape_page
+  - python_repl
+  sandbox_mode: subprocess
+  token_budget: 8000

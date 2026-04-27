@@ -1,0 +1,9 @@
+openai>=1.0.0
+beautifulsoup4
+ddgs
+pydantic>=2.0.0
+PyYAML
+python-dotenv
+tenacity
+aiohttp
+httpx
