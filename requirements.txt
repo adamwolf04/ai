@@ -1,6 +1,6 @@
 openai>=1.0.0
 beautifulsoup4
-ddgs
+duckduckgo-search
 pydantic>=2.0.0
 PyYAML
 python-dotenv

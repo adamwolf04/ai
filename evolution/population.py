@@ -80,6 +80,10 @@ class PopulationManager(PopulationStore):
             return None, 0.0
         return best, self.scores.get(best.id, 0.0)
 
+    def get_failures(self, spec_id: str) -> list:
+        """Returns the list of failures for a given spec."""
+        return self.failures.get(spec_id, [])
+
     # Alias kept for backward compatibility
     def get_best_spec(self) -> Optional[AgentSpec]:
         return self.get_best()

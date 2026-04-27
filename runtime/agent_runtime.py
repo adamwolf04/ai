@@ -13,11 +13,7 @@ from dataclasses import dataclass, field
 
 @dataclass
 class RunState:
-    """
-    Encapsulates the session state of a single run.
-    Since ResearchRunner is instantiated and executed per-task sequentially within its scope, 
-    this state guarantees complete isolation between concurrent tasks.
-    """
+    """Each ResearchRunner holds a private RunState, so concurrent tasks are isolated."""
     step_count: int = 0
     error_count: int = 0
     total_tokens: int = 0
@@ -30,7 +26,7 @@ from tenacity import (
 )
 
 from spec import AgentSpec
-from runtime.tool_belt import AsyncToolBelt
+from runtime.tool_belt import AsyncToolBelt, TOOL_SUMMARY_LIMITS
 from runtime.stop_condition import evaluate_stop_condition
 from interfaces import RunResult
 from evaluator.constants import (
@@ -59,9 +55,7 @@ _OPENAI_RETRY = retry(
 
 def _summarize_tool_output(name: str, raw_output: str) -> str:
     """Trims tool output to save context tokens. (Rule #5: Encapsulation)"""
-    limit = 2000
-    if name == "scrape_page":
-        limit = 1000
+    limit = TOOL_SUMMARY_LIMITS.get(name, TOOL_SUMMARY_LIMITS["default"])
         
     if len(raw_output) > limit:
         return raw_output[:limit] + "\n[Content truncated for brevity]"

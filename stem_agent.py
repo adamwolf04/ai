@@ -130,7 +130,7 @@ class StemAgent:
 
         # 2. Evolutionary Operators (Rule #1: Decomposition to evolution/operators.py)
         for spec in population:
-            failures = self._pop_manager.failures.get(spec.id, [])
+            failures = self._pop_manager.get_failures(spec.id)
             if failures:
                 # Targeted LLM Mutation
                 examples = self._db.get_failure_examples(spec.id, limit=3)

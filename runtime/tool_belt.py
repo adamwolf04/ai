@@ -20,7 +20,7 @@ import hashlib
 import asyncio
 import threading
 from bs4 import BeautifulSoup
-from ddgs import DDGS
+from duckduckgo_search import DDGS
 
 
 # ---------------------------------------------------------------------------
@@ -107,8 +107,8 @@ def scrape_page(url: str) -> str:
             tag.extract()
         lines  = (ln.strip() for ln in soup.get_text(separator=" ").splitlines())
         chunks = (ph.strip() for ln in lines for ph in ln.split("  "))
-        # Using the scrape_page limit explicitly here for the raw extraction
-        text   = "\n".join(ch for ch in chunks if ch)[:TOOL_SUMMARY_LIMITS["scrape_page"]]
+        # Raw extraction gets up to 5000 chars; summarizer will handle token budgets
+        text   = "\n".join(ch for ch in chunks if ch)[:5000]
         output = text
     except Exception as e:
         # Fallback: search_web with the domain name as the query
