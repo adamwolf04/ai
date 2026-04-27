@@ -60,6 +60,14 @@ class PopulationManager(PopulationStore):
                 return spec
         return None
 
+    def get_unevaluated_specs(self) -> list[AgentSpec]:
+        """Returns specs that have not been evaluated yet."""
+        return [s for s in self.population if not self.has_score(s.id)]
+
+    def has_score(self, spec_id: str) -> bool:
+        """Checks if a spec has been evaluated."""
+        return spec_id in self.scores
+
     def get_best(self) -> Optional[AgentSpec]:
         if not self.population:
             return None

@@ -23,7 +23,6 @@ An evolutionary meta-agent that autonomously evolves a specialised Deep Research
 │                     │ RunResult                             │
 │         ┌───────────▼───────────┐                           │
 │         │  Verifiable Scorer    │   (zero LLM — 100% det.) │
-│         │  + optional LLM Judge │   (--qualitative only)   │
 │         └───────────────────────┘                           │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -33,7 +32,7 @@ An evolutionary meta-agent that autonomously evolves a specialised Deep Research
 | Decision | Rationale |
 |---|---|
 | Deterministic verifiable scorer | LLM judges introduce noise; exact-match / tolerance scoring provides a stable fitness signal |
-| AsyncIO evaluation loop | 8× speed improvement vs. sequential; `asyncio.Semaphore` prevents API rate-limit hammering |
+| AsyncIO evaluation loop | Speed improvement vs. sequential; `asyncio.gather` with semaphores prevents API hammering |
 | Architectural mutations | LLM mutator can change `tools`, `planning_strategy`, `stop_condition` — not just prompt text |
 | Single-writer SQLite lineage DB | Prevents database-locked errors under concurrent async writes |
 | Subprocess REPL sandbox | Eliminates raw `exec()` security hole; hard timeout + restricted env |
@@ -66,14 +65,8 @@ python main.py
 # Quick smoke test (3 generations, fast tasks)
 python main.py --quick
 
-# Full benchmark on held-out test set after evolution
-python main.py --benchmark
-
-# Qualitative run: LLM judge on 5 open-ended tasks after evolution
-python main.py --qualitative
-
-# Combine flags
-python main.py --benchmark --qualitative
+# Wipe existing lineage data before run
+python main.py --fresh
 ```
 
 ## Evaluation
@@ -84,8 +77,6 @@ The primary fitness signal is fully **deterministic** — no LLM involved during
 - **numeric**: relative tolerance window (configurable per task)
 - **set_comparison**: Jaccard similarity against required answer set
 - **list_comparison**: intersection/union, order-insensitive
-
-The `--qualitative` flag re-runs the evolved agent on 5 open-ended research questions and scores them with a separate LLM judge, providing the human-readable quality check.
 
 ## Datasets
 

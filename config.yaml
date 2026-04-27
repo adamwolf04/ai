@@ -25,7 +25,7 @@ paths:
 runtime:
   agent_model: gpt-4o-mini
   available_tools:
-  - web_search
+  - search_web
   - scrape_page
   - python_repl
   sandbox_mode: subprocess

@@ -18,6 +18,7 @@ import json
 import time
 import hashlib
 import asyncio
+import threading
 from bs4 import BeautifulSoup
 from ddgs import DDGS
 
@@ -27,10 +28,18 @@ from ddgs import DDGS
 # ---------------------------------------------------------------------------
 
 _CACHE: dict[str, tuple[str, float]] = {}   # key -> (result, expiry_timestamp)
+_CACHE_LOCK = threading.Lock()
 _URL_LOCKS: dict[str, asyncio.Lock] = {}     # per-URL async lock
 
 _TTL_SEARCH = int(os.environ.get("CACHE_TTL_SEARCH", "1800"))   # 30 min
 _TTL_SCRAPE = int(os.environ.get("CACHE_TTL_SCRAPE", "3600"))   # 60 min
+
+# Constants replacing magic numbers
+TOOL_TIMEOUT_S = 10
+TOOL_SUMMARY_LIMITS = {
+    "scrape_page": 1000,
+    "default": 2000
+}
 
 SANDBOX_MODE = os.environ.get("SANDBOX_MODE", "subprocess")     # subprocess | docker
 
@@ -41,16 +50,18 @@ def _cache_key(tool: str, kwargs: dict) -> str:
 
 
 def _cache_get(key: str) -> str | None:
-    if key in _CACHE:
-        val, expiry = _CACHE[key]
-        if time.time() < expiry:
-            return val
-        del _CACHE[key]
+    with _CACHE_LOCK:
+        if key in _CACHE:
+            val, expiry = _CACHE[key]
+            if time.time() < expiry:
+                return val
+            del _CACHE[key]
     return None
 
 
 def _cache_set(key: str, value: str, ttl: int):
-    _CACHE[key] = (value, time.time() + ttl)
+    with _CACHE_LOCK:
+        _CACHE[key] = (value, time.time() + ttl)
 
 
 # ---------------------------------------------------------------------------
@@ -89,14 +100,15 @@ def scrape_page(url: str) -> str:
 
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=10) as response:
+        with urllib.request.urlopen(req, timeout=TOOL_TIMEOUT_S) as response:
             html = response.read()
         soup = BeautifulSoup(html, "html.parser")
         for tag in soup(["script", "style"]):
             tag.extract()
         lines  = (ln.strip() for ln in soup.get_text(separator=" ").splitlines())
         chunks = (ph.strip() for ln in lines for ph in ln.split("  "))
-        text   = "\n".join(ch for ch in chunks if ch)[:5000]
+        # Using the scrape_page limit explicitly here for the raw extraction
+        text   = "\n".join(ch for ch in chunks if ch)[:TOOL_SUMMARY_LIMITS["scrape_page"]]
         output = text
     except Exception as e:
         # Fallback: search_web with the domain name as the query

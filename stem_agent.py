@@ -99,10 +99,7 @@ class StemAgent:
 
     async def _evaluate_unevaluated_specs(self):
         """Identifies and scores specs that lack evaluation data."""
-        unevaluated = [
-            s for s in self._pop_manager.population
-            if s.id not in self._pop_manager.scores
-        ]
+        unevaluated = self._pop_manager.get_unevaluated_specs()
         
         async def eval_spec(spec: AgentSpec):
             print(f"  Evaluating {spec.id}...")
@@ -120,7 +117,7 @@ class StemAgent:
 
     async def _evolve_next_generation(self):
         """Creates mutations and crossovers for the next population (Rule #1)."""
-        population = self._pop_manager.population
+        population = self._pop_manager.get_top_k(self.config["evolution"]["population_size"])
         if not population:
             return
 
@@ -153,6 +150,9 @@ class StemAgent:
                 next_gen_specs.append(child_x)
 
         self._pop_manager.add_specs(next_gen_specs)
+        
+        # Rule #1 & Critical Bug Fix: Cull population to prevent unbounded growth
+        self._pop_manager.cull(self.config["evolution"]["population_size"])
 
     # ------------------------------------------------------------------
     # Internal Helpers (Rule #5: Encapsulation)

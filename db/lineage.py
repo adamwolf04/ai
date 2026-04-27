@@ -96,6 +96,25 @@ class LineageDB:
         )
         self._writer_thread.start()
 
+        self._register_shutdown_handlers()
+
+    def _register_shutdown_handlers(self):
+        """Registers handlers to gracefully flush and close the DB on exit."""
+        import atexit
+        import signal
+        
+        def graceful_shutdown(*args):
+            self.close()
+
+        atexit.register(graceful_shutdown)
+        
+        try:
+            if threading.current_thread() is threading.main_thread():
+                signal.signal(signal.SIGINT, graceful_shutdown)
+                signal.signal(signal.SIGTERM, graceful_shutdown)
+        except (ValueError, AttributeError):
+            pass
+
     # ------------------------------------------------------------------
     # Public write API  (enqueues; returns immediately)
     # ------------------------------------------------------------------

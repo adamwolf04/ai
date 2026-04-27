@@ -16,6 +16,6 @@ else:
     print("No non-success runs found")
 
 # Also check for actual error strings
-row = conn.execute("SELECT error FROM evaluations WHERE error IS NOT NULL LIMIT 1").fetchone()
+row = conn.execute("SELECT cause_code FROM evaluations WHERE cause_code IS NOT NULL AND cause_code != 'OK' LIMIT 1").fetchone()
 if row:
-    print(f"Error: {row['error']}")
+    print(f"Error: {row['cause_code']}")

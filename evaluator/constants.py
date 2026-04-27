@@ -2,6 +2,10 @@
 Shared constants for evaluation status and cause codes.
 """
 
+# Run states
+STATUS_SUCCESS = "success"
+STATUS_ERROR = "error"
+
 # Success states
 CAUSE_OK = "OK"
 

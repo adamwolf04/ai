@@ -42,7 +42,7 @@ def _print_comparison_table(baseline: Dict[str, Any], evolved: Dict[str, Any]):
     
     total = len(baseline["per_task"])
     print(f"{'Test Avg Score':<30} {baseline['avg_score']:>10.3f} {evolved['avg_score']:>10.3f}")
-    print(f"{'Exact Match Rate':<30} {baseline['match_rate']:>10.1%} {evolved['match_rate']:>10.1%}")
+    print(f"{'Precision@1':<30} {baseline['match_rate']:>10.1%} {evolved['match_rate']:>10.1%}")
     print("=" * 60)
 
     print("\nPer-task breakdown (evolved):")

@@ -9,15 +9,20 @@ import json
 import os
 import re
 from typing import List, Tuple, Dict, Any, Optional
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 @dataclass
 class RunState:
-    """Encapsulates the state of a single run to ensure thread-safety during concurrent execution."""
+    """
+    Encapsulates the session state of a single run.
+    Since ResearchRunner is instantiated and executed per-task sequentially within its scope, 
+    this state guarantees complete isolation between concurrent tasks.
+    """
     step_count: int = 0
     error_count: int = 0
     total_tokens: int = 0
     current_plan_step: int = 0
+    messages: List[Dict[str, Any]] = field(default_factory=list)
 
 from openai import AsyncOpenAI, APIError
 from tenacity import (
@@ -33,13 +38,16 @@ from evaluator.constants import (
     CAUSE_TOKEN_BUDGET_EXCEEDED,
     CAUSE_MAX_STEPS_REACHED,
     CAUSE_STOPPED_WITH_ERRORS,
-    CAUSE_CRASH
+    CAUSE_CRASH,
+    STATUS_SUCCESS,
+    STATUS_ERROR
 )
 
 
 # Rule #2: Constants
 TOKEN_BUDGET_DEFAULT = int(os.environ.get("TOKEN_BUDGET", "8000"))
 MAX_RETRY_ATTEMPTS = 3
+MAX_STOP_FAILURES = 3
 
 _OPENAI_RETRY = retry(
     stop=stop_after_attempt(MAX_RETRY_ATTEMPTS),
@@ -94,9 +102,7 @@ class ResearchRunner:
         try:
             return await self._execute_task(task)
         except Exception as e:
-            import traceback
-            traceback.print_exc()
-            return RunResult(status="error", error=str(e), report=f"Runtime error: {e}")
+            return RunResult(status=STATUS_ERROR, error=str(e), report=f"Runtime error: {e}", steps=0, token_count=0, trace=[])
 
     async def close(self):
         """Cleanly shutdown the HTTP client."""
@@ -106,38 +112,39 @@ class ResearchRunner:
     async def _execute_task(self, task: str) -> RunResult:
         """Internal execution loop. Decomposed for clarity. (Rule #1)"""
         system_prompt, plan_steps = await self._initialize_session(task)
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user",   "content": f"Task: {task}\n\nPerform deep research and answer accurately."}
-        ]
         
-        state = RunState()
+        state = RunState(
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user",   "content": f"Task: {task}\n\nPerform deep research and answer accurately."}
+            ]
+        )
 
         while state.step_count < self.spec.stop_condition.max_steps:
             state.step_count += 1
-            self._inject_plan_step(messages, plan_steps, state)
+            self._inject_plan_step(plan_steps, state)
 
-            response = await self._call_llm(messages)
+            response = await self._call_llm(state.messages)
             
             if self._update_and_check_budget(response, state):
-                return self._build_result(messages, state, CAUSE_TOKEN_BUDGET_EXCEEDED)
+                return self._build_result(state, CAUSE_TOKEN_BUDGET_EXCEEDED)
 
             assistant_msg = response.choices[0].message
-            messages.append(assistant_msg.model_dump(exclude_unset=True))
+            state.messages.append(assistant_msg.model_dump(exclude_unset=True))
 
             if assistant_msg.tool_calls:
-                await self._process_tool_calls(assistant_msg.tool_calls, messages, plan_steps, state)
+                await self._process_tool_calls(assistant_msg.tool_calls, plan_steps, state)
             else:
-                final_result = self._process_final_response(assistant_msg.content or "", messages, state)
+                final_result = self._process_final_response(assistant_msg.content or "", state)
                 if final_result:
                     return final_result
 
-        return self._build_result(messages, state, CAUSE_MAX_STEPS_REACHED)
+        return self._build_result(state, CAUSE_MAX_STEPS_REACHED)
 
-    def _inject_plan_step(self, messages: List[Dict[str, Any]], plan_steps: List[str], state: RunState):
+    def _inject_plan_step(self, plan_steps: List[str], state: RunState):
         """Injects the current plan step into the prompt if planning is active."""
         if plan_steps and state.current_plan_step < len(plan_steps):
-            messages.append({
+            state.messages.append({
                 "role": "user",
                 "content": f"[Plan Step {state.current_plan_step + 1}/{len(plan_steps)}]: {plan_steps[state.current_plan_step]}"
             })
@@ -148,37 +155,35 @@ class ResearchRunner:
             state.total_tokens += response.usage.total_tokens
         return state.total_tokens >= self.token_budget
 
-    async def _process_tool_calls(self, tool_calls: List[Any], messages: List[Dict[str, Any]], 
-                                  plan_steps: List[str], state: RunState):
+    async def _process_tool_calls(self, tool_calls: List[Any], plan_steps: List[str], state: RunState):
         """Executes tools and updates the agent's progress along its plan."""
-        await self._handle_tool_calls(tool_calls, messages)
+        await self._handle_tool_calls(tool_calls, state.messages)
         if plan_steps and self.spec.planning_strategy == "plan_and_solve":
-            state.current_plan_step = await self._track_plan_progress(messages, len(plan_steps))
+            state.current_plan_step = await self._track_plan_progress(state.messages, len(plan_steps))
 
-    def _process_final_response(self, report: str, messages: List[Dict[str, Any]], state: RunState) -> Optional[RunResult]:
+    def _process_final_response(self, report: str, state: RunState) -> Optional[RunResult]:
         """Evaluates whether the agent's final report meets stop conditions."""
         is_valid, err_msg, cause = evaluate_stop_condition(report, self.spec.stop_condition)
 
         if not is_valid:
             state.error_count += 1
-            if state.error_count > 3:
-                return self._build_result(messages, state, CAUSE_STOPPED_WITH_ERRORS, error=f"{cause}: {err_msg}", report=report)
+            if state.error_count > MAX_STOP_FAILURES:
+                return self._build_result(state, CAUSE_STOPPED_WITH_ERRORS, error=f"{cause}: {err_msg}", report=report)
             
-            messages.append({"role": "user", "content": f"REJECTED ({cause}): {err_msg}. Please fix."})
+            state.messages.append({"role": "user", "content": f"REJECTED ({cause}): {err_msg}. Please fix."})
             return None
 
-        return self._build_result(messages, state, "success", report=report)
+        return self._build_result(state, STATUS_SUCCESS, report=report)
 
-    def _build_result(self, messages: List[Dict[str, Any]], state: RunState, 
-                      status: str, error: Optional[str] = None, report: Optional[str] = None) -> RunResult:
+    def _build_result(self, state: RunState, status: str, error: Optional[str] = None, report: Optional[str] = None) -> RunResult:
         """Standardized helper to construct RunResult objects."""
         return RunResult(
-            report=report if report is not None else self._get_last_report(messages),
+            report=report if report is not None else self._get_last_report(state.messages),
             steps=state.step_count,
             status=status,
             error=error,
             token_count=state.total_tokens,
-            trace=messages
+            trace=state.messages
         )
 
     async def _initialize_session(self, task: str) -> Tuple[str, List[str]]:

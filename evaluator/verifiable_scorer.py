@@ -7,7 +7,8 @@ from evaluator.constants import (
     CAUSE_OK,
     CAUSE_WRONG_VALUE,
     CAUSE_ANSWER_NOT_FOUND,
-    CAUSE_CRASH
+    CAUSE_CRASH,
+    STATUS_SUCCESS
 )
 
 
@@ -54,7 +55,10 @@ def _score_numeric(output: str, task: Dict[str, Any]) -> Dict[str, Any]:
             "cause_code": CAUSE_ANSWER_NOT_FOUND
         }
 
-    # Use the last number mentioned as the "final" answer
+    # Design Decision: Use the *last* number mentioned as the final answer.
+    # While iterating over all numbers and picking the closest is an option,
+    # relying on the last number enforces that the agent's final conclusion
+    # must be explicitly correct, rather than coincidentally matching intermediate math.
     final_val = found_values[-1]
     
     for ans_str in target_answers:
@@ -85,7 +89,12 @@ def _score_numeric(output: str, task: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _score_set(output: str, task: Dict[str, Any]) -> Dict[str, Any]:
-    """Jaccard similarity for unordered sets of answers."""
+    """
+    Jaccard similarity for unordered sets of answers.
+    Note: Requires exact substring match after lowercasing. Partial matches 
+    (e.g., 'apples' vs 'apple') will fail. This strictness must be accounted for 
+    when curating verifiable task sets.
+    """
     target_answers = [a.lower().strip() for a in task["answers"]]
     output_lower = output.lower()
     
@@ -150,7 +159,7 @@ def score_run_result(run_result: Dict[str, Any], task: Dict[str, Any]) -> Dict[s
     status = run_result.get("status", "error")
     report = run_result.get("report", "")
     
-    if status != "success":
+    if status != STATUS_SUCCESS:
         return {
             "score": 0.0,
             "matched": False,
