@@ -20,7 +20,7 @@ import hashlib
 import asyncio
 import threading
 from bs4 import BeautifulSoup
-from duckduckgo_search import DDGS
+from ddgs import DDGS
 
 
 # ---------------------------------------------------------------------------
