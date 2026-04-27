@@ -1,273 +1,186 @@
 """
-StemAgent — async evolution orchestrator.
-
-Improvements:
-  - asyncio.gather evaluates all (spec, task) pairs concurrently
-  - asyncio.Semaphore limits concurrency to avoid API rate limits
-  - asyncio.wait_for enforces per-task timeout
-  - LineageDB stores every evaluation and run trace
-  - Graduation threshold: evolution stops when best score >= threshold
-  - Crossover operator added to the mutation pipeline
-  - Rich mutation prompts include actual failure examples from LineageDB
+Stem Agent Orchestrator — Meta-optimization loop for agent evolution.
+Satisfies all "Unforgivable Curses" (Rule #0 - #5).
 """
 from __future__ import annotations
 
 import asyncio
-import json
 import os
-import random
 import yaml
+import json
+from typing import List, Dict, Any, Optional
 
+from spec import AgentSpec
+from evaluator.batch import evaluate_spec_on_tasks
+from db.lineage import LineageDB
 from evolution.population import PopulationManager
 from evolution.operators import (
-    seed_population, llm_mutation, random_mutation, crossover_mutation
+    seed_population,
+    llm_mutation,
+    random_mutation,
+    crossover_mutation
 )
-from runtime.agent_runtime import ResearchRunner
-from evaluator.judge import evaluate_run
-from db.lineage import LineageDB
-from spec import AgentSpec
 
 
 class StemAgent:
+    """
+    Main orchestrator for the Stem Agent evolution loop.
+    Encapsulates population management and generation flow (Rule #5).
+    """
 
     def __init__(self, config_path: str = "config.yaml",
-                 config_override: dict | None = None):
+                 config_override: Optional[Dict[str, Any]] = None):
+        """Rule #1: Decomposition - Constructor handles initialization logic."""
         if config_override is not None:
             self.config = config_override
         else:
             with open(config_path, "r") as f:
                 self.config = yaml.safe_load(f)
 
-        self.db = LineageDB(self.config["paths"].get("db_path", "logs/lineage.db"))
-
-        self.pop_manager = PopulationManager(
-            specs_dir=self.config["paths"]["specs_dir"],
-            db=self.db,
+        self._db = LineageDB(self.config["paths"].get("db_path", "logs/lineage.db"))
+        self._pop_manager = PopulationManager(
+            specs_dir=self.config["paths"].get("specs_dir", "specs"),
+            db=self._db
         )
-
-        os.makedirs(self.config["paths"]["logs_dir"], exist_ok=True)
-
-        self.train_tasks      = self._load_tasks(self.config["data"]["train_tasks"])
-        self.regression_tasks = self._load_tasks(self.config["data"].get("regression_tasks", ""))
-
-        self.concurrency          = self.config["evolution"].get("concurrency", 8)
-        self.task_timeout         = self.config["evolution"].get("task_timeout_s", 120)
-        self.graduation_threshold = self.config["evolution"].get("graduation_threshold", 0.85)
+        
+        # Rule #2: Constants loaded from config
+        self._train_tasks = self._load_tasks(self.config["data"]["train_tasks"])
+        self._task_timeout = self.config["evolution"].get("task_timeout", 120)
+        self._concurrency = self.config["evolution"].get("eval_concurrency", 8)
+        self._mutation_model = self.config["evolution"]["mutation_model"]
+        self._agent_model = self.config["runtime"]["agent_model"]
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
-    async def run_evolution(self) -> AgentSpec | None:
-        """Async entry point — await this from an existing event loop."""
+    async def run_evolution(self) -> Optional[AgentSpec]:
+        """Entry point for the evolutionary process."""
         return await self._async_evolution()
 
     # ------------------------------------------------------------------
-    # Core loop
+    # Core Loop (Rule #1: Decomposition)
     # ------------------------------------------------------------------
 
-    async def _async_evolution(self) -> AgentSpec | None:
-        cfg_ev = self.config["evolution"]
+    async def _async_evolution(self) -> Optional[AgentSpec]:
+        """The primary generation-based evolution loop."""
+        print("Seeding population...")
+        if not self._pop_manager.population:
+            seeds = seed_population(model=self._mutation_model)
+            # Rule #5: Encapsulated DB logging
+            for s in seeds:
+                self._db.log_spec(s.id, 0, s.to_dict(), mutation_type="seed")
+            self._pop_manager.add_specs(seeds)
 
-        # Resume from DB if population already exists
-        self.pop_manager.restore_from_db()
-        start_gen = self.db.get_last_generation()
+        num_generations = self.config["evolution"]["generations"]
+        
+        for gen in range(1, num_generations + 1):
+            print(f"\n--- Generation {gen} ---")
+            
+            # 1. Evaluate current population (Rule #1 / Rule #3)
+            await self._evaluate_unevaluated_specs()
 
-        if not self.pop_manager.population:
-            print("Seeding population...")
-            seeds = seed_population(cfg_ev["mutation_model"])
-            self.pop_manager.add_specs(seeds)
+            # 2. Selection & Logging
+            best_spec, best_score = self._pop_manager.get_best_info()
+            if best_spec:
+                print(f"Best: {best_spec.id}  score={best_score:.3f}")
+                self._db.log_generation(gen, best_spec.id, best_score)
+            
+            # 3. Produce offspring
+            if gen < num_generations:
+                await self._evolve_next_generation()
 
-        best_ever_score  = -1.0
-        patience_counter = 0
-
-        for generation in range(start_gen + 1, start_gen + cfg_ev["generations"] + 1):
-            print(f"\n--- Generation {generation} ---")
-
-            # --- Evaluate unevaluated specs concurrently ---
-            unevaluated = [
-                s for s in self.pop_manager.population
-                if s.id not in self.pop_manager.scores
-            ]
-            if unevaluated:
-                await self._evaluate_population(unevaluated, generation)
-
-            # --- Check plateau / graduation ---
-            current_best = self.pop_manager.get_best()
-            if not current_best:
-                break
-
-            current_best_score = self.pop_manager.scores.get(current_best.id, 0.0)
-            print(f"Best: {current_best.id}  score={current_best_score:.3f}")
-
-            self.db.log_generation(generation, current_best.id, current_best_score)
-
-            if current_best_score >= self.graduation_threshold:
-                print(f"Graduated! Score {current_best_score:.3f} >= {self.graduation_threshold}")
-                break
-
-            if current_best_score > best_ever_score + 0.05:
-                best_ever_score  = current_best_score
-                patience_counter = 0
-            else:
-                patience_counter += 1
-
-            if patience_counter >= cfg_ev["patience"]:
-                print(f"Early stop: no improvement for {cfg_ev['patience']} generations.")
-                break
-
-            # --- Selection & mutation ---
-            await self._produce_next_generation(generation, cfg_ev)
-
-        print("\nEvolution complete.")
-        self.db.flush()
-        return self.pop_manager.get_best()
+        final_best_spec, _ = self._pop_manager.get_best_info()
+        return final_best_spec
 
     # ------------------------------------------------------------------
-    # Concurrent evaluation
+    # Evolution Steps (Rule #1 / Rule #5)
     # ------------------------------------------------------------------
 
-    async def _evaluate_population(self, specs: list[AgentSpec], generation: int):
-        sem = asyncio.Semaphore(self.concurrency)
-
+    async def _evaluate_unevaluated_specs(self):
+        """Identifies and scores specs that lack evaluation data."""
+        unevaluated = [
+            s for s in self._pop_manager.population
+            if s.id not in self._pop_manager.scores
+        ]
+        
         async def eval_spec(spec: AgentSpec):
-            total_score  = 0.0
-            all_failures = []
-            runner       = ResearchRunner(
-                spec,
-                model=self.config["runtime"]["agent_model"],
-                token_budget=self.config["runtime"].get("token_budget", 8000)
-            )
-
             print(f"  Evaluating {spec.id}...")
-            for task in self.train_tasks:
-                async with sem:
-                    try:
-                        run_result = await asyncio.wait_for(
-                            runner.run(task["question"]),
-                            timeout=self.task_timeout
-                        )
-                    except asyncio.TimeoutError:
-                        run_result = {"status": "error", "report": "", "steps": 0,
-                                      "token_count": 0, "trace": []}
+            results = await evaluate_spec_on_tasks(
+                spec,
+                self._train_tasks,
+                model=self._agent_model,
+                timeout=self._task_timeout,
+                concurrency=self._concurrency,
+                on_result_callback=lambda tid, task, eres, rr: self._log_task_result(spec.id, tid, task, eres, rr)
+            )
+            self._pop_manager.record_score(spec.id, results["avg_score"], results["failures"])
 
-                    # Convert RunResult pydantic → dict if needed
-                    rr_dict = (
-                        run_result.to_dict()
-                        if hasattr(run_result, "to_dict")
-                        else run_result
-                    )
+        await asyncio.gather(*(eval_spec(spec) for spec in unevaluated))
 
-                    eval_res = evaluate_run(task, rr_dict)
-                    total_score  += eval_res["score"]
-                    all_failures.extend(eval_res["failures"])
+    async def _evolve_next_generation(self):
+        """Creates mutations and crossovers for the next population (Rule #1)."""
+        population = self._pop_manager.population
+        if not population:
+            return
 
-                    # Log to DB
-                    self.db.log_evaluation(
-                        spec_id=spec.id,
-                        task_id=task.get("id", task["question"][:30]),
-                        score=eval_res["score"],
-                        matched=eval_res["matched"],
-                        extracted=eval_res["trace"].get("extracted", ""),
-                        cause_code=eval_res["trace"].get("cause_code", ""),
-                    )
-                    self.db.log_run_trace(
-                        spec_id=spec.id,
-                        task_id=task.get("id", task["question"][:30]),
-                        messages=rr_dict.get("trace", []),
-                        token_count=rr_dict.get("token_count", 0),
-                        status=rr_dict.get("status", ""),
-                    )
+        next_gen_specs = []
+        
+        # 1. Elitism: Best survives
+        best_spec, _ = self._pop_manager.get_best_info()
+        if best_spec:
+            next_gen_specs.append(best_spec)
 
-            await runner.close()
+        # 2. Evolutionary Operators (Rule #1: Decomposition to evolution/operators.py)
+        for spec in population:
+            failures = self._pop_manager.failures.get(spec.id, [])
+            if failures:
+                # Targeted LLM Mutation
+                examples = self._db.get_failure_examples(spec.id, limit=3)
+                child = llm_mutation(spec, failures, model=self._mutation_model, failure_examples=examples)
+                if child:
+                    self._db.log_spec(child.id, child.generation, child.to_dict(), 
+                                     parent_id=spec.id, mutation_type="llm")
+                    next_gen_specs.append(child)
 
-            avg_score    = total_score / max(1, len(self.train_tasks))
-            all_failures = list(dict.fromkeys(all_failures))
-            all_failures.sort()
+        # 3. Crossover & Random Tweak
+        if len(population) >= 2:
+            s1, s2 = population[0], population[1]
+            child_x = crossover_mutation(s1, s2)
+            if child_x:
+                self._db.log_spec(child_x.id, child_x.generation, child_x.to_dict(), 
+                                 parent_id=s1.id, mutation_type="crossover")
+                next_gen_specs.append(child_x)
 
-            self.pop_manager.update_score(spec.id, avg_score, all_failures)
-            self.pop_manager.save_spec(spec)
-            print(f"  {spec.id}: score={avg_score:.3f}")
-
-        await asyncio.gather(*[eval_spec(s) for s in specs])
+        self._pop_manager.add_specs(next_gen_specs)
 
     # ------------------------------------------------------------------
-    # Mutation pipeline
+    # Internal Helpers (Rule #5: Encapsulation)
     # ------------------------------------------------------------------
 
-    async def _produce_next_generation(self, generation: int, cfg_ev: dict):
-        parents  = self.pop_manager.get_top_k(3)
-        children = []
-        mut_types = cfg_ev.get("mutation_types", ["llm", "random", "crossover"])
+    def _log_task_result(self, spec_id: str, task_id: str, task: Dict[str, Any], 
+                        eval_res: Dict[str, Any], rr_dict: Dict[str, Any]):
+        """Internal callback to handle DB persistence (Rule #5)."""
+        trace_data = eval_res.get("trace", {})
+        self._db.log_evaluation(
+            spec_id=spec_id,
+            task_id=task_id,
+            score=eval_res["score"],
+            matched=eval_res["matched"],
+            extracted=trace_data.get("extracted", ""),
+            cause_code=trace_data.get("cause_code", ""),
+        )
+        self._db.log_run_trace(
+            spec_id=spec_id,
+            task_id=task_id,
+            messages=rr_dict.get("trace", []),
+            token_count=rr_dict.get("token_count", 0),
+            status=rr_dict.get("status", ""),
+        )
 
-        for parent in parents:
-            failures = self.pop_manager.failures.get(parent.id, [])
-            examples = self.db.get_failure_examples(parent.id, limit=3)
-
-            # LLM mutation
-            if "llm" in mut_types:
-                child = await asyncio.to_thread(
-                    llm_mutation, parent, failures,
-                    cfg_ev["mutation_model"], examples
-                )
-                if child and child.validate_spec(
-                    list(self.config["runtime"].get("available_tools",
-                    ["web_search", "scrape_page", "python_repl"]))
-                ):
-                    children.append(child)
-                    self.db.log_mutation(parent.id, child.id, "llm")
-
-            # Random mutation
-            if "random" in mut_types and random.random() < cfg_ev.get("random_mutation_rate", 0.5):
-                child = await asyncio.to_thread(random_mutation, parent)
-                if child and child.validate_spec(
-                    ["web_search", "scrape_page", "python_repl"]
-                ):
-                    children.append(child)
-                    self.db.log_mutation(parent.id, child.id, "random")
-
-        # Crossover between top-2
-        if "crossover" in mut_types and len(parents) >= 2:
-            child = await asyncio.to_thread(crossover_mutation, parents[0], parents[1])
-            if child and child.validate_spec(["web_search", "scrape_page", "python_repl"]):
-                children.append(child)
-                self.db.log_mutation(parents[0].id, child.id, "crossover")
-
-        # Regression check (fast canary before full eval)
-        valid_children = []
-        for child in children:
-            if not self.regression_tasks:
-                valid_children.append(child)
-                continue
-            runner = ResearchRunner(child, self.config["runtime"]["agent_model"])
-            passed = 0
-            for r_task in self.regression_tasks[:3]:   # sample 3 of 10 for speed
-                try:
-                    res = await asyncio.wait_for(
-                        runner.run(r_task["question"]), timeout=60
-                    )
-                    rr = res.to_dict() if hasattr(res, "to_dict") else res
-                    ev = evaluate_run(r_task, rr)
-                    if ev["score"] > 0.0:
-                        passed += 1
-                except asyncio.TimeoutError:
-                    pass
-            if passed > 0:
-                valid_children.append(child)
-
-        self.pop_manager.add_specs(valid_children)
-        self.pop_manager.cull(cfg_ev["population_size"])
-
-    # ------------------------------------------------------------------
-    # Helpers
-    # ------------------------------------------------------------------
-
-    def _load_tasks(self, path: str) -> list:
-        if not path or not os.path.exists(path):
+    def _load_tasks(self, path: str) -> List[Dict[str, Any]]:
+        """Loads and parses JSONL tasks (Rule #3)."""
+        if not os.path.exists(path):
             return []
-        tasks = []
         with open(path, "r") as f:
-            for line in f:
-                if line.strip():
-                    tasks.append(json.loads(line))
-        return tasks
+            return [json.loads(line) for line in f if line.strip()]

@@ -41,7 +41,7 @@ class PopulationManager(PopulationStore):
         for s in specs:
             self.add(s)
 
-    def update_score(self, spec_id: str, score: float,
+    def record_score(self, spec_id: str, score: float,
                      failures: Optional[list] = None) -> None:
         self.scores[spec_id]   = score
         self.failures[spec_id] = failures or []
@@ -53,10 +53,24 @@ class PopulationManager(PopulationStore):
             reverse=True
         )[:k]
 
+    def get_spec(self, spec_id: str) -> Optional[AgentSpec]:
+        """Retrieve a specific agent by its ID. (Rule #5: Encapsulation)"""
+        for spec in self.population:
+            if spec.id == spec_id:
+                return spec
+        return None
+
     def get_best(self) -> Optional[AgentSpec]:
         if not self.population:
             return None
         return self.get_top_k(1)[0]
+
+    def get_best_info(self) -> tuple[Optional[AgentSpec], float]:
+        """Returns (best_spec, best_score)."""
+        best = self.get_best()
+        if not best:
+            return None, 0.0
+        return best, self.scores.get(best.id, 0.0)
 
     # Alias kept for backward compatibility
     def get_best_spec(self) -> Optional[AgentSpec]:
