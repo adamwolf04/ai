@@ -1,7 +1,7 @@
 data:
   regression_tasks: tasks/regression.jsonl
   test_tasks: tasks/test_verifiable.jsonl
-  train_tasks: tasks/train_fast.jsonl
+  train_tasks: tasks/warmup.jsonl
 evaluator:
   judge_model: gpt-4o-mini
   qualitative_tasks: tasks/train.jsonl
@@ -29,4 +29,4 @@ runtime:
   - scrape_page
   - python_repl
   sandbox_mode: subprocess
-  token_budget: 8000
+  token_budget: 12000

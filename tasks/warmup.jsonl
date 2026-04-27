@@ -1,0 +1,5 @@
+{"id": "warmup_001", "type": "factoid", "question": "What is the atomic number of carbon?", "answers": ["6"], "tolerance": 0.0}
+{"id": "warmup_002", "type": "factoid", "question": "How many continents are there on Earth?", "answers": ["7"], "tolerance": 0.0}
+{"id": "warmup_003", "type": "factoid", "question": "In what year was Python first released?", "answers": ["1991"], "tolerance": 0.0}
+{"id": "warmup_004", "type": "factoid", "question": "How many planets are in the Solar System (excluding dwarf planets)?", "answers": ["8"], "tolerance": 0.0}
+{"id": "warmup_005", "type": "factoid", "question": "What is the boiling point of water in degrees Celsius at sea level?", "answers": ["100"], "tolerance": 0.0}

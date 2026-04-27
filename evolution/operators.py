@@ -58,6 +58,7 @@ def seed_population(model: str = "gpt-4o-mini") -> list[AgentSpec]:
             model=model,
             messages=[{"role": "user", "content": _SEED_PROMPT}],
             response_format={"type": "json_object"},
+            temperature=0.7,
         )
         data = json.loads(response.choices[0].message.content)
         specs = []
@@ -71,6 +72,34 @@ def seed_population(model: str = "gpt-4o-mini") -> list[AgentSpec]:
                     specs.append(spec)
             except Exception:
                 pass
+                
+        # Inject the "silver seed"
+        silver = AgentSpec(
+            id="seed_silver",
+            system_prompt=(
+                "You are a research scientist. Your goal is to answer the user's question by using the available tools to gather and verify evidence.\n\n"
+                "Follow this process:\n"
+                "1. **Search**: Use search_web to find relevant information.\n"
+                "2. **Verify**: If possible, scrape a reliable page to confirm the facts.\n"
+                "3. **Reason**: Analyse the gathered evidence. If the answer is numeric, ensure you have the correct value and units.\n"
+                "4. **Respond**: Format your final response exactly as follows:\n\n"
+                "   <explanation> A short summary of the evidence. </explanation>\n"
+                "   <final_answer> The exact answer, as a number or short phrase. If numeric, give only the value without units or commas. </final_answer>\n"
+                "   <sources> A list of URLs you used. </sources>\n\n"
+                "   For example:\n"
+                "   <explanation> Wikipedia states the atomic number of carbon is 6. </explanation>\n"
+                "   <final_answer>6</final_answer>\n"
+                "   <sources>https://en.wikipedia.org/wiki/Carbon</sources>\n\n"
+                "Do NOT output anything after the <sources> tag. Keep the <final_answer> on its own line. If you are not completely sure, still provide your best answer."
+            ),
+            tools=["search_web"],
+            planning_strategy="react",
+            stop_condition={"min_report_length": 50, "must_include_citations": False, "max_steps": 8},
+            temperature=0.0,
+            mutation_type="seed"
+        )
+        specs.append(silver)
+        
         return specs
     except Exception as e:
         print(f"[seed_population] Error: {e}")
@@ -142,6 +171,7 @@ Return the COMPLETE modified spec as valid JSON only. Do not include explanation
             model=model,
             messages=[{"role": "user", "content": prompt}],
             response_format={"type": "json_object"},
+            temperature=0.7,
         )
         data = json.loads(response.choices[0].message.content)
         data["id"]            = spec.id.split("_")[0] + "_m" + str(random.randint(100, 999))

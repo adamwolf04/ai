@@ -12,7 +12,7 @@ class MemorySpec(BaseModel):
 class StopConditionSpec(BaseModel):
     min_report_length:     int  = Field(default=500)
     must_include_citations: bool = Field(default=True)
-    max_steps:             int  = Field(default=25)
+    max_steps:             int  = Field(default=10)
 
 
 class AgentSpec(BaseModel):
@@ -23,6 +23,7 @@ class AgentSpec(BaseModel):
     memory:           MemorySpec         = Field(default_factory=MemorySpec)
     stop_condition:   StopConditionSpec  = Field(default_factory=StopConditionSpec)
     output_schema:    str                = Field(default="markdown_report_with_citations")
+    temperature:      float              = Field(default=0.0, ge=0.0, le=2.0)
 
     # Lineage fields (populated by the orchestrator, not by the LLM)
     parent_id:     Optional[str] = Field(default=None)

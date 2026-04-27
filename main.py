@@ -62,8 +62,8 @@ async def main_async(args):
     # --- Quick mode: override in-memory (Rule #2) ---
     if args.quick:
         cfg["evolution"]["generations"] = 3
-        if os.path.exists("tasks/train_fast.jsonl"):
-            cfg["data"]["train_tasks"] = "tasks/train_fast.jsonl"
+        if os.path.exists("tasks/warmup.jsonl"):
+            cfg["data"]["train_tasks"] = "tasks/warmup.jsonl"
         print("[QUICK MODE] 3 generations, fast task set.\n")
 
     test_tasks = _load_tasks(cfg["data"]["test_tasks"])

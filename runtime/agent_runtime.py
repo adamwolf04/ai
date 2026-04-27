@@ -205,6 +205,7 @@ class ResearchRunner:
         if tool_schemas and "tools" not in kwargs:
             kwargs["tools"] = tool_schemas
             kwargs["tool_choice"] = "auto"
+        kwargs.setdefault("temperature", getattr(self.spec, "temperature", 0.0))
 
         return await self.client.chat.completions.create(
             model=self.model,

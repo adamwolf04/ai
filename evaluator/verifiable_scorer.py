@@ -16,6 +16,13 @@ def _normalize_commas(text: str) -> str:
     """Removes commas from numbers: 1,500,000 -> 1500000."""
     return re.sub(r'(\d),(\d)', r'\1\2', text)
 
+def _extract_final_answer(report: str) -> Optional[str]:
+    """Extracts the content of the <final_answer> tag if present."""
+    match = re.search(r'<final_answer>\s*(.*?)\s*</final_answer>', report, re.DOTALL | re.IGNORECASE)
+    if match:
+        return match.group(1).strip()
+    return None
+
 
 def _normalize_sci_notation(text: str) -> str:
     """
@@ -59,6 +66,12 @@ def _score_numeric(output: str, task: Dict[str, Any]) -> Dict[str, Any]:
     # While iterating over all numbers and picking the closest is an option,
     # relying on the last number enforces that the agent's final conclusion
     # must be explicitly correct, rather than coincidentally matching intermediate math.
+    
+    # NEW: Try to extract explicit tag first
+    tagged_answer = _extract_final_answer(output)
+    if tagged_answer:
+        found_values = _extract_numbers(tagged_answer) or found_values
+        
     final_val = found_values[-1]
     
     for ans_str in target_answers:
